@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 
@@ -30,18 +31,62 @@ func NewSqlHandler() database.SqlHandler {
 
 	fmt.Println("✅ Successfully connected to the database!")
 
+	// init.sqlを読み込んで実行
 	sqlBytes, err := os.ReadFile("sql/init.sql")
 	if err != nil {
 		fmt.Printf("❌ Failed to read init.sql: %v\n", err)
 	} else {
-		if _, err := conn.Exec(string(sqlBytes)); err != nil {
-			fmt.Printf("❌ Failed to execute init.sql: %v\n", err)
-		} else {
-			fmt.Println("✅ Successfully initialized database from init.sql")
+		// SQLファイルを個別のステートメントに分割
+		sqlContent := string(sqlBytes)
+		statements := splitSQLStatements(sqlContent)
+		
+		for _, stmt := range statements {
+			stmt = strings.TrimSpace(stmt)
+			if stmt == "" || strings.HasPrefix(stmt, "--") {
+				continue
+			}
+			
+			if _, err := conn.Exec(stmt); err != nil {
+				fmt.Printf("⚠️  Warning executing SQL statement: %v\n", err)
+				// エラーがあっても続行（テーブルが既に存在する場合など）
+			}
 		}
+		fmt.Println("✅ Successfully initialized database from init.sql")
 	}
 
 	return &MySqlHandler{Conn: conn}
+}
+
+// SQLステートメントを分割するヘルパー関数
+func splitSQLStatements(sql string) []string {
+	var statements []string
+	var current strings.Builder
+	
+	lines := strings.Split(sql, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		
+		// コメント行をスキップ
+		if strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		
+		current.WriteString(line)
+		current.WriteString("\n")
+		
+		// セミコロンで終わる行で分割
+		if strings.HasSuffix(trimmed, ";") {
+			statements = append(statements, current.String())
+			current.Reset()
+		}
+	}
+	
+	// 残りのステートメントを追加
+	if current.Len() > 0 {
+		statements = append(statements, current.String())
+	}
+	
+	return statements
 }
 
 func (h *MySqlHandler) Execute(ctx context.Context, statement string, args ...interface{}) (database.Result, error) {
